@@ -6,8 +6,15 @@ green='\033[0;32m'
 yellow='\033[0;33m'
 white='\033[0m'
 
+# ================= VARIANT =================
+VARIANT=$1
+if [ -z "$VARIANT" ]; then
+    VARIANT="KSU" # Default fallback
+fi
+
 # ================= PATH =================
 DEFCONFIG=tissot_defconfig
+TEMP_DEFCONFIG=${DEFCONFIG}_temp
 ROOTDIR=$(pwd)
 OUTDIR="$ROOTDIR/out/arch/arm64/boot"
 ANYKERNEL_DIR="$ROOTDIR/AnyKernel"
@@ -75,7 +82,7 @@ send_telegram_error() {
     curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
         -d chat_id="${TG_CHAT_ID}" \
         -d parse_mode=Markdown \
-        -d text="❌ *Kernel CI Build Test Failed*
+        -d text="❌ *Kernel CI Build Test Failed [${VARIANT}]*
 
 📄 *Log attached below* "
 
@@ -86,11 +93,11 @@ send_telegram_start() {
 curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
         -d chat_id="${TG_CHAT_ID}" \
         -d parse_mode=Markdown \
-        -d text="🚀 *Kernel CI Build Test Started* "
+        -d text="🚀 *Kernel CI Build Test Started [${VARIANT}]* "
 }
 
 send_telegram_log() {
-    LOG_FILE="$ROOTDIR/logs/build.txt"
+    LOG_FILE="$ROOTDIR/logs/build-${VARIANT}.txt"
 
     [ ! -f "$LOG_FILE" ] && return
 
@@ -108,37 +115,30 @@ send_telegram_start
 echo -e "$yellow[+] Getting toolchain info...$white"
 get_toolchain_info
 
-echo -e "$yellow[+] Check root directory...$white"
-ls -a
+echo -e "$yellow[+] Removing out folder...$white"
+rm -rf out
     
-    echo -e "$yellow[+] Removing out folder...$white"
-    rm -rf out
-    
-echo -e "$yellow[+] Check root directory...$white"
-ls -a
-    
-    echo -e "$yellow[+] Creating out folder...$white"
-    mkdir -p out
-   
-echo -e "$yellow[+] Check root directory...$white"
-ls -a
+echo -e "$yellow[+] Creating out folder...$white"
+mkdir -p out
 
-# Setting config
-echo -e "$yellow[+] Preparing kernel config...$white"
-make O=out ARCH=arm64 ${DEFCONFIG} || {
+# === DYNAMIC DEFCONFIG SETUP ===
+echo -e "$yellow[+] Preparing kernel config for ${VARIANT}...$white"
+cp arch/arm64/configs/${DEFCONFIG} arch/arm64/configs/${TEMP_DEFCONFIG}
+
+# Jika varian Non-KSU, matikan CONFIG_KSU secara dinamis
+if [ "$VARIANT" == "Non-KSU" ]; then
+    echo -e "$yellow[+] Stripping KSU configs for Non-KSU build...$white"
+    sed -i 's/CONFIG_KSU=y/# CONFIG_KSU is not set/g' arch/arm64/configs/${TEMP_DEFCONFIG}
+fi
+
+make O=out ARCH=arm64 ${TEMP_DEFCONFIG} || {
     send_telegram_error
     exit 1
 }
 
-echo -e "$yellow[+] Check root directory...$white"
-ls -a
-
 BUILD_START=$(TZ=Asia/Jakarta date +%s)
 
-echo -e "$yellow[+] Check out directory before build...$white"
-ls -a out
-
-echo -e "$yellow[+] Building Kernel...$white"
+echo -e "$yellow[+] Building Kernel [${VARIANT}]...$white"
 make -j$(nproc --all) \
   ARCH=arm64 \
   O=out \
@@ -148,27 +148,22 @@ make -j$(nproc --all) \
         send_telegram_error
         exit 1
     }
-    # LD=ld.lld \
-    # LLVM=1 \
-    # LLVM_IAS=1 \
-    BUILD_END=$(TZ=Asia/Jakarta date +%s)
-    DIFF=$((BUILD_END - BUILD_START))
-    BUILD_TIME="$((DIFF / 60)) min $((DIFF % 60)) sec"
+
+BUILD_END=$(TZ=Asia/Jakarta date +%s)
+DIFF=$((BUILD_END - BUILD_START))
+BUILD_TIME="$((DIFF / 60)) min $((DIFF % 60)) sec"
 
 echo -e "$yellow[+] Getting kernel version...$white"
-    get_kernel_version
+get_kernel_version
 
-    ZIP_NAME="${KERNEL_NAME}-${DEVICE}-${KERNEL_VERSION}-${DATE_TITLE}-${TIME_TITLE}.zip"
+# Menambahkan varian ke nama zip agar tidak tertukar
+ZIP_NAME="${KERNEL_NAME}-${VARIANT}-${DEVICE}-${KERNEL_VERSION}-${DATE_TITLE}-${TIME_TITLE}.zip"
 }
-
-echo -e "$yellow[+] Check root directory...$white"
-ls -a
 
 # =============== Zipping Kernel ===============
 pack_kernel() {
     echo -e "$yellow[+] Packing AnyKernel...$white"
 
-echo -e "$yellow[+] Cloning AnyKernel...$white"
     clone_anykernel
     cd "$ANYKERNEL_DIR" || exit 1
 
@@ -207,6 +202,7 @@ upload_telegram() {
 
 📱 *Device* : ${DEVICE}
 📦 *Kernel Name* : ${KERNEL_NAME}
+🏷️ *Variant* : ${VARIANT}
 🍃 *Kernel Version* : ${KERNEL_VERSION}
 
 🛠 *Toolchain* :
