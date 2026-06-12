@@ -18,7 +18,7 @@ KIMG="$OUTDIR/Image.gz"
 export PATH="$ROOTDIR/clang-zyc/bin:$PATH"
 
 # ================= INFO =================
-KERNEL_NAME="ReLIFE-Treble"
+KERNEL_NAME="Yoru-Treble"
 DEVICE="tissot"
 
 # =============== DATE (WIB) ===============
