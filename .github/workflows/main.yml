@@ -12,6 +12,9 @@ defaults:
 jobs:
   buildtest:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        variant: [KSU, Non-KSU] # Menjalankan 2 build sekaligus secara paralel
 
     steps:
       - name: Checkout
@@ -42,11 +45,11 @@ jobs:
             rm -f zyc-clang.tar.gz
   
       - name: Setup KernelSU (Legacy)
+        if: ${{ matrix.variant == 'KSU' }} # Hanya pasang source KSU jika varian KSU
         run: |
           curl -LSs "https://raw.githubusercontent.com/rahmatsobrian/YoruNoKernelSU/dev/kernel/setup.sh" | bash -s legacy
-          #curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s legacy
 
-      - name: Start Build with log)
+      - name: Start Build with log
         env:
           KBUILD_BUILD_USER: "Hoshino"
           KBUILD_BUILD_HOST: "Yoru"
@@ -54,33 +57,34 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
           mkdir -p logs
-          bash buildclang.sh 2>&1 | tee logs/build.txt
+          # Mengirim nama varian (KSU/Non-KSU) ke dalam bash script
+          bash buildclang.sh ${{ matrix.variant }} 2>&1 | tee logs/build-${{ matrix.variant }}.txt
 
       - name: Upload Build Log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log
-          path: logs/build.txt
+          name: build-log-${{ matrix.variant }}
+          path: logs/build-${{ matrix.variant }}.txt
 
       - name: Upload AnyKernel Zip
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: anykernel-zip
+          name: anykernel-zip-${{ matrix.variant }}
           path: AnyKernel/*.zip
 
       - name: Upload Kernel Image
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: image-gz
+          name: image-gz-${{ matrix.variant }}
           path: out/arch/arm64/boot/Image.gz
 
       - name: Upload DTB
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: image-gz-dtb
+          name: image-gz-dtb-${{ matrix.variant }}
           path: out/arch/arm64/boot/Image.gz-dtb
           
