@@ -33,9 +33,11 @@ DATE_TITLE=$(TZ=Asia/Jakarta date +"%d%m%Y")
 TIME_TITLE=$(TZ=Asia/Jakarta date +"%H%M%S")
 BUILD_DATETIME=$(TZ=Asia/Jakarta date +"%d %B %Y")
 
-# ================= TELEGRAM =================
+# ================= API & TELEGRAM =================
 TG_BOT_TOKEN="${TG_BOT_TOKEN}"
 TG_CHAT_ID="${TG_CHAT_ID}"
+PIXELDRAIN_API_KEY="${PIXELDRAIN_API_KEY}"
+SAFELINKU_API_TOKEN="${SAFELINKU_API_TOKEN}"
 
 # ================= GLOBAL =================
 BUILD_TIME="unknown"
@@ -175,34 +177,44 @@ upload_telegram() {
     echo -e "$yellow[+] Uploading to Pixeldrain...$white"
     PD_RESPONSE=$(curl -s -T "${ZIP_PATH}" -u :${PIXELDRAIN_API_KEY} "https://pixeldrain.com/api/file/${ZIP_NAME}")
     
-    # Ambil ID dan buat URL
     PD_ID=$(echo $PD_RESPONSE | jq -r .id)
     if [ "$PD_ID" != "null" ] && [ -n "$PD_ID" ]; then
         PD_LINK="https://pixeldrain.com/u/${PD_ID}"
         echo -e "$green[✓] Pixeldrain Link: $PD_LINK$white"
     else
         echo -e "$red[✗] Upload Pixeldrain Gagal!$white"
-        echo "PD Response: $PD_RESPONSE"
         PD_LINK="Upload Failed"
     fi
 
     echo -e "$yellow[+] Generating Safelinku shortlink...$white"
-    # Menggunakan REST API v1 Safelinku
+    
+    # Ditambahkan User-Agent agar tidak diblokir oleh Cloudflare SafelinkU
     SL_RESPONSE=$(curl -s -X POST "https://safelinku.com/api/v1/links" \
+        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36" \
         -H "Authorization: Bearer ${SAFELINKU_API_TOKEN}" \
         -H "Content-Type: application/json" \
         -d "{\"url\": \"${PD_LINK}\"}")
     
-    # Mengambil value 'url' dari respon JSON
-    SL_LINK=$(echo $SL_RESPONSE | jq -r .url)
+    # Debug respon jika kosong
+    echo "Raw Safelinku Response: $SL_RESPONSE"
+    
+    # Ekstrak link menggunakan jq, abaikan pesan error jika bukan JSON
+    SL_LINK=$(echo "$SL_RESPONSE" | jq -r '.url // empty' 2>/dev/null)
 
-    # Validasi apakah link berhasil didapatkan
-    if [ "$SL_LINK" != "null" ] && [ -n "$SL_LINK" ] && [ "$SL_LINK" != "" ]; then
+    if [ -n "$SL_LINK" ] && [ "$SL_LINK" != "null" ]; then
         echo -e "$green[✓] Safelinku Link: $SL_LINK$white"
     else
-        echo -e "$red[✗] Gagal membuat link Safelinku!$white"
-        echo -e "$red[!] Response Error: $SL_RESPONSE$white"
-        SL_LINK="Generation Failed"
+        echo -e "$red[✗] API v1 Gagal, mencoba fallback ke API standar...$white"
+        
+        # Fallback menggunakan metode GET API yang lebih lama/simpel dari Safelinku jika POST v1 diblokir
+        FALLBACK_RESPONSE=$(curl -s -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "https://safelinku.com/api?api=${SAFELINKU_API_TOKEN}&url=${PD_LINK}")
+        SL_LINK=$(echo "$FALLBACK_RESPONSE" | jq -r '.shortenedUrl // empty' 2>/dev/null)
+        
+        if [ -n "$SL_LINK" ] && [ "$SL_LINK" != "null" ]; then
+             echo -e "$green[✓] Safelinku Link (Fallback): $SL_LINK$white"
+        else
+             SL_LINK="Generation Failed"
+        fi
     fi
 
     echo -e "$yellow[+] Sending message to Telegram...$white"
