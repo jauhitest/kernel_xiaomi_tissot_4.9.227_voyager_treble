@@ -9,7 +9,7 @@ white='\033[0m'
 # ================= VARIANT =================
 VARIANT=$1
 if [ -z "$VARIANT" ]; then
-    VARIANT="KSU" # Default fallback
+    VARIANT="KSU"
 fi
 
 # ================= PATH =================
@@ -70,77 +70,72 @@ send_telegram_error() {
         -d parse_mode=Markdown \
         -d text="❌ *Kernel CI Build Test Failed [${VARIANT}]*
 
-📄 *Log attached below* "
+📄 *Log attached below*"
 
     send_telegram_log
 }
 
 send_telegram_start() {
-curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+    curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
         -d chat_id="${TG_CHAT_ID}" \
         -d parse_mode=Markdown \
-        -d text="🚀 *Kernel CI Build Test Started [${VARIANT}]* "
+        -d text="🚀 *Kernel CI Build Test Started [${VARIANT}]*"
 }
 
 send_telegram_log() {
     LOG_FILE="$ROOTDIR/logs/build-${VARIANT}.txt"
-
     [ ! -f "$LOG_FILE" ] && return
-
     curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
         -F chat_id="${TG_CHAT_ID}" \
-        -F document=@"${LOG_FILE}" 
+        -F document=@"${LOG_FILE}"
 }
 
 # ================= Build Kernel =================
 build_kernel() {
+    echo -e "$yellow[+] Sending telegram start...$white"
+    send_telegram_start
 
-echo -e "$yellow[+] Sending telegram start...$white"
-send_telegram_start
+    echo -e "$yellow[+] Removing out folder...$white"
+    rm -rf out
 
-echo -e "$yellow[+] Removing out folder...$white"
-rm -rf out
-    
-echo -e "$yellow[+] Creating out folder...$white"
-mkdir -p out
+    echo -e "$yellow[+] Creating out folder...$white"
+    mkdir -p out
 
-# === DYNAMIC DEFCONFIG SETUP ===
-echo -e "$yellow[+] Preparing kernel config for ${VARIANT}...$white"
-cp arch/arm64/configs/${DEFCONFIG} arch/arm64/configs/${TEMP_DEFCONFIG}
+    # === DYNAMIC DEFCONFIG SETUP ===
+    echo -e "$yellow[+] Preparing kernel config for ${VARIANT}...$white"
+    cp arch/arm64/configs/${DEFCONFIG} arch/arm64/configs/${TEMP_DEFCONFIG}
 
-# Jika varian Non-KSU, matikan CONFIG_KSU secara dinamis
-if [ "$VARIANT" == "Non-KSU" ]; then
-    echo -e "$yellow[+] Stripping KSU configs for Non-KSU build...$white"
-    sed -i 's/CONFIG_KSU=y/# CONFIG_KSU is not set/g' arch/arm64/configs/${TEMP_DEFCONFIG}
-fi
+    if [ "$VARIANT" == "NonKSU" ]; then
+        echo -e "$yellow[+] Stripping KSU configs for Non-KSU build...$white"
+        sed -i 's/CONFIG_KSU=y/# CONFIG_KSU is not set/g' arch/arm64/configs/${TEMP_DEFCONFIG}
+    fi
 
-make O=out ARCH=arm64 ${TEMP_DEFCONFIG} || {
-    send_telegram_error
-    exit 1
-}
-
-BUILD_START=$(TZ=Asia/Jakarta date +%s)
-
-echo -e "$yellow[+] Building Kernel [${VARIANT}]...$white"
-make -j$(nproc --all) \
-  ARCH=arm64 \
-  O=out \
-  CC=clang \
-  CROSS_COMPILE=aarch64-linux-gnu- \
-  CROSS_COMPILE_ARM32=arm-linux-gnueabi- || {
+    make O=out ARCH=arm64 ${TEMP_DEFCONFIG} || {
         send_telegram_error
         exit 1
     }
 
-BUILD_END=$(TZ=Asia/Jakarta date +%s)
-DIFF=$((BUILD_END - BUILD_START))
-BUILD_TIME="$((DIFF / 60)) min $((DIFF % 60)) sec"
+    BUILD_START=$(TZ=Asia/Jakarta date +%s)
 
-echo -e "$yellow[+] Getting kernel version...$white"
-get_kernel_version
+    echo -e "$yellow[+] Building Kernel [${VARIANT}]...$white"
+    make -j$(nproc --all) \
+        ARCH=arm64 \
+        O=out \
+        CC=clang \
+        CROSS_COMPILE=aarch64-linux-gnu- \
+        CROSS_COMPILE_ARM32=arm-linux-gnueabi- || {
+            send_telegram_error
+            exit 1
+        }
 
-# Menambahkan varian ke nama zip agar tidak tertukar
-ZIP_NAME="${KERNEL_NAME}-${VARIANT}-${DEVICE}-${KERNEL_VERSION}-${DATE_TITLE}-${TIME_TITLE}.zip"
+    BUILD_END=$(TZ=Asia/Jakarta date +%s)
+    DIFF=$((BUILD_END - BUILD_START))
+    BUILD_TIME="$((DIFF / 60)) min $((DIFF % 60)) sec"
+
+    echo -e "$yellow[+] Getting kernel version...$white"
+    get_kernel_version
+
+    ZIP_NAME="${KERNEL_NAME}-${VARIANT}-${DEVICE}-${KERNEL_VERSION}-${DATE_TITLE}-${TIME_TITLE}.zip"
 }
 
 # =============== Zipping Kernel ===============
@@ -163,7 +158,7 @@ pack_kernel() {
         exit 1
     fi
 
-echo -e "$yellow[+] Zipping kernel...$white"
+    echo -e "$yellow[+] Zipping kernel...$white"
     zip -r9 "$ZIP_NAME" . -x ".git*" "README.md"
 
     echo -e "$green[✓] Zip created: $ZIP_NAME ($IMG_USED)$white"
@@ -174,50 +169,65 @@ upload_telegram() {
     ZIP_PATH="$ANYKERNEL_DIR/$ZIP_NAME"
     [ ! -f "$ZIP_PATH" ] && return
 
+    # ===== Upload to Pixeldrain =====
     echo -e "$yellow[+] Uploading to Pixeldrain...$white"
     PD_RESPONSE=$(curl -s -T "${ZIP_PATH}" -u :${PIXELDRAIN_API_KEY} "https://pixeldrain.com/api/file/${ZIP_NAME}")
-    
-    PD_ID=$(echo $PD_RESPONSE | jq -r .id)
-    if [ "$PD_ID" != "null" ] && [ -n "$PD_ID" ]; then
+
+    PD_ID=$(echo "$PD_RESPONSE" | jq -r '.id // empty')
+    if [ -n "$PD_ID" ] && [ "$PD_ID" != "null" ]; then
         PD_LINK="https://pixeldrain.com/u/${PD_ID}"
         echo -e "$green[✓] Pixeldrain Link: $PD_LINK$white"
     else
-        echo -e "$red[✗] Upload Pixeldrain Gagal!$white"
+        echo -e "$red[✗] Upload Pixeldrain Gagal! Response: $PD_RESPONSE$white"
         PD_LINK="Upload Failed"
     fi
 
+    # ===== Generate Safelinku Shortlink =====
     echo -e "$yellow[+] Generating Safelinku shortlink...$white"
-    
-    # Ditambahkan User-Agent agar tidak diblokir oleh Cloudflare SafelinkU
-    SL_RESPONSE=$(curl -s -X POST "https://safelinku.com/api/v1/links" \
-        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36" \
+
+    SL_RESPONSE=$(curl -s \
+        --max-time 30 \
+        -X POST "https://safelinku.com/api/v1/links" \
         -H "Authorization: Bearer ${SAFELINKU_API_TOKEN}" \
         -H "Content-Type: application/json" \
+        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
         -d "{\"url\": \"${PD_LINK}\"}")
-    
-    # Debug respon jika kosong
-    echo "Raw Safelinku Response: $SL_RESPONSE"
-    
-    # Ekstrak link menggunakan jq, abaikan pesan error jika bukan JSON
-    SL_LINK=$(echo "$SL_RESPONSE" | jq -r '.url // empty' 2>/dev/null)
 
-    if [ -n "$SL_LINK" ] && [ "$SL_LINK" != "null" ]; then
-        echo -e "$green[✓] Safelinku Link: $SL_LINK$white"
-    else
-        echo -e "$red[✗] API v1 Gagal, mencoba fallback ke API standar...$white"
-        
-        # Fallback menggunakan metode GET API yang lebih lama/simpel dari Safelinku jika POST v1 diblokir
-        FALLBACK_RESPONSE=$(curl -s -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "https://safelinku.com/api?api=${SAFELINKU_API_TOKEN}&url=${PD_LINK}")
-        SL_LINK=$(echo "$FALLBACK_RESPONSE" | jq -r '.shortenedUrl // empty' 2>/dev/null)
-        
+    echo -e "$yellow[DEBUG] Raw Safelinku Response: $SL_RESPONSE$white"
+
+    # Cek apakah response adalah JSON valid
+    if echo "$SL_RESPONSE" | jq -e . > /dev/null 2>&1; then
+        # Response JSON valid — ekstrak field "url" sesuai dokumentasi resmi
+        SL_LINK=$(echo "$SL_RESPONSE" | jq -r '.url // empty')
+
         if [ -n "$SL_LINK" ] && [ "$SL_LINK" != "null" ]; then
-             echo -e "$green[✓] Safelinku Link (Fallback): $SL_LINK$white"
+            echo -e "$green[✓] Safelinku Link: $SL_LINK$white"
         else
-             SL_LINK="Generation Failed"
+            # JSON valid tapi field "url" tidak ada — kemungkinan error response
+            ERROR_MSG=$(echo "$SL_RESPONSE" | jq -r '.message // .error // "Unknown error"')
+            echo -e "$red[✗] Safelinku API Error: $ERROR_MSG$white"
+            SL_LINK="Generation Failed"
         fi
+    else
+        # Response bukan JSON — kemungkinan Cloudflare block (HTML response)
+        echo -e "$red[✗] Safelinku blocked (non-JSON response, kemungkinan Cloudflare)$white"
+        SL_LINK="Generation Failed"
     fi
 
+    # ===== Send to Telegram =====
     echo -e "$yellow[+] Sending message to Telegram...$white"
+
+    # Tentukan baris download sesuai kondisi Safelinku
+    if [ "$SL_LINK" != "Generation Failed" ]; then
+        DOWNLOAD_TEXT="📥 *Download Links*:
+🔗 [Direct Download (Pixeldrain)](${PD_LINK})
+💰 [Support via Safelinku](${SL_LINK})"
+    else
+        DOWNLOAD_TEXT="📥 *Download Links*:
+🔗 [Direct Download (Pixeldrain)](${PD_LINK})
+⚠️ Safelinku: Generation Failed"
+    fi
+
     curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
         -d chat_id="${TG_CHAT_ID}" \
         -d parse_mode=Markdown \
@@ -231,9 +241,7 @@ upload_telegram() {
 ⌛ *Build Time* : ${BUILD_TIME}
 🕒 *Build Date* : ${BUILD_DATETIME}
 
-📥 *Download Links*:
-🔗 [Direct Download (Pixeldrain)](${PD_LINK})
-💰 [Support via Safelinku](${SL_LINK})"
+${DOWNLOAD_TEXT}"
 
     send_telegram_log
 }
