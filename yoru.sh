@@ -36,8 +36,10 @@ BUILD_DATETIME=$(TZ=Asia/Jakarta date +"%d %B %Y")
 # ================= API & TELEGRAM =================
 TG_BOT_TOKEN="${TG_BOT_TOKEN}"
 TG_CHAT_ID="${TG_CHAT_ID}"
-PIXELDRAIN_API_KEY="${PIXELDRAIN_API_KEY}"
-SAFELINKU_API_TOKEN="${SAFELINKU_API_TOKEN}"
+export PIXELDRAIN_API_KEY="${PIXELDRAIN_API_KEY}"
+export TELE_API_ID="${TELE_API_ID}"
+export TELE_API_HASH="${TELE_API_HASH}"
+export TELE_SESSION="${TELE_SESSION}"
 
 # ================= GLOBAL =================
 BUILD_TIME="unknown"
@@ -175,49 +177,84 @@ upload_telegram() {
 
     PD_ID=$(echo "$PD_RESPONSE" | jq -r '.id // empty')
     if [ -n "$PD_ID" ] && [ "$PD_ID" != "null" ]; then
-        PD_LINK="https://pixeldrain.com/u/${PD_ID}"
+        export PD_LINK="https://pixeldrain.com/u/${PD_ID}"
         echo -e "$green[✓] Pixeldrain Link: $PD_LINK$white"
     else
         echo -e "$red[✗] Upload Pixeldrain Gagal! Response: $PD_RESPONSE$white"
-        PD_LINK="Upload Failed"
+        export PD_LINK="Upload Failed"
     fi
 
-    # ===== Generate Safelinku Shortlink =====
-    echo -e "$yellow[+] Generating Safelinku shortlink...$white"
+    # ===== Generate Safelinku via Telegram Userbot =====
+    echo -e "$yellow[+] Generating Safelinku via Telegram Userbot...$white"
 
-    SL_RESPONSE=$(curl -s \
-        --max-time 30 \
-        -X POST "https://safelinku.com/api/v1/links" \
-        -H "Authorization: Bearer ${SAFELINKU_API_TOKEN}" \
-        -H "Content-Type: application/json" \
-        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
-        -d "{\"url\": \"${PD_LINK}\"}")
+    # Jalankan Python Telethon langsung di dalam Bash
+    SL_LINK=$(python3 << 'EOF'
+import asyncio, os, re, logging
+from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 
-    echo -e "$yellow[DEBUG] Raw Safelinku Response: $SL_RESPONSE$white"
+# Sembunyikan warning telethon agar output bersih
+logging.basicConfig(level=logging.ERROR)
 
-    # Cek apakah response adalah JSON valid
-    if echo "$SL_RESPONSE" | jq -e . > /dev/null 2>&1; then
-        # Response JSON valid — ekstrak field "url" sesuai dokumentasi resmi
-        SL_LINK=$(echo "$SL_RESPONSE" | jq -r '.url // empty')
+api_id = os.environ.get("TELE_API_ID", "")
+api_hash = os.environ.get("TELE_API_HASH", "")
+session_string = os.environ.get("TELE_SESSION", "")
+pd_link = os.environ.get("PD_LINK", "")
+bot_username = "@safelinku_bot"
 
-        if [ -n "$SL_LINK" ] && [ "$SL_LINK" != "null" ]; then
-            echo -e "$green[✓] Safelinku Link: $SL_LINK$white"
-        else
-            # JSON valid tapi field "url" tidak ada — kemungkinan error response
-            ERROR_MSG=$(echo "$SL_RESPONSE" | jq -r '.message // .error // "Unknown error"')
-            echo -e "$red[✗] Safelinku API Error: $ERROR_MSG$white"
-            SL_LINK="Generation Failed"
-        fi
+async def main():
+    if not api_id or not api_hash or not session_string:
+        print("Generation Failed (Missing Telegram Secrets)")
+        return
+
+    if pd_link == "Upload Failed":
+        print("Generation Failed (Pixeldrain failed)")
+        return
+
+    client = TelegramClient(StringSession(session_string), int(api_id), api_hash)
+    await client.start()
+    
+    loop = asyncio.get_event_loop()
+    future = loop.create_future()
+    
+    @client.on(events.NewMessage(chats=bot_username))
+    async def handler(event):
+        text = event.message.message
+        # Cek apakah bot membalas dengan link sfl.gl atau safelinku
+        if "http" in text:
+            urls = re.findall(r'(https?://[^\s]+)', text)
+            if urls:
+                future.set_result(urls[-1])
+            else:
+                future.set_result("Generation Failed (Bot replied without URL)")
+    
+    # Minta bot untuk membuat shortlink
+    await client.send_message(bot_username, f"/shortlink {pd_link}")
+    
+    try:
+        # Tunggu balasan dari bot maksimal 15 detik
+        res = await asyncio.wait_for(future, timeout=15.0)
+    except asyncio.TimeoutError:
+        res = "Generation Failed (Bot Timeout)"
+        
+    print(res)
+    await client.disconnect()
+
+asyncio.run(main())
+EOF
+)
+
+    # Validasi URL yang dikembalikan dari Python
+    if [[ "$SL_LINK" == http* ]]; then
+        echo -e "$green[✓] Safelinku Link: $SL_LINK$white"
     else
-        # Response bukan JSON — kemungkinan Cloudflare block (HTML response)
-        echo -e "$red[✗] Safelinku blocked (non-JSON response, kemungkinan Cloudflare)$white"
+        echo -e "$red[✗] Safelinku Userbot Error: $SL_LINK$white"
         SL_LINK="Generation Failed"
     fi
 
     # ===== Send to Telegram =====
     echo -e "$yellow[+] Sending message to Telegram...$white"
 
-    # Tentukan baris download sesuai kondisi Safelinku
     if [ "$SL_LINK" != "Generation Failed" ]; then
         DOWNLOAD_TEXT="📥 *Download Links*:
 🔗 [Direct Download (Pixeldrain)](${PD_LINK})
